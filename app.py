@@ -105,18 +105,16 @@ if uploaded_file and is_configured:
         "Unpacking ZIP and processing chat transcripts via Vertex AI...",
         expanded=True,
     ) as status:
-      st.write("📂 Unpacking Google Takeout ZIP archive and scanning files...")
+      st.write("📂 Unpacking Google Takeout ZIP archive and scanning all files...")
       chat_transcripts = []
 
       try:
         with zipfile.ZipFile(io.BytesIO(uploaded_file.read())) as z:
           for filename in z.namelist():
-            lower_name = filename.lower()
-            # Universal sweep across Takeout folders for Gemini or Activity logs
-            if any(
-                k in lower_name
-                for k in ["gemini", "myactivity", "activity", "chats"]
-            ) and filename.endswith((".json", ".html")):
+            # Universal sweep: checks every JSON and HTML file in the ZIP archive
+            if filename.endswith((".json", ".html")) and not filename.startswith(
+                "__MACOSX"
+            ):
               with z.open(filename) as f:
                 content_bytes = f.read()
                 if filename.endswith(".json"):
@@ -168,15 +166,14 @@ if uploaded_file and is_configured:
 
       if not chat_transcripts:
         st.warning(
-            "⚠️ No valid chat history files were found inside this ZIP archive."
-            " Please ensure you selected the 'Gemini' export option when"
-            " downloading from Google Takeout."
+            "⚠️ No valid chat records were found inside this ZIP archive."
+            " Please ensure your Takeout export finished downloading properly."
         )
         st.stop()
 
       st.write(
-          f"Found {len(chat_transcripts)} valid chat records. Initializing"
-          " Vertex AI model client..."
+          f"Found {len(chat_transcripts)} valid chat records across your"
+          " archive. Initializing Vertex AI model client..."
       )
       client = genai.Client()
 
