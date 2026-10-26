@@ -1,23 +1,24 @@
+import io
 import json
 import os
+import zipfile
+from bs4 import BeautifulSoup
 from google import genai
 import streamlit as st
 
 # Page Configuration
 st.set_page_config(
-    page_title="C-SPACE Taxonomic Routing & Lifecycle Pipeline",
-    page_icon="🧹",
-    layout="wide",
+    page_title="C-SPACE ZIP Takeout Pipeline", page_icon="🧹", layout="wide"
 )
 
-st.title("🧹 C-SPACE Taxonomic Chat Lifecycle & Routing Pipeline")
+st.title("🧹 C-SPACE Direct ZIP Takeout Pipeline")
 st.markdown(
-    "Automate your Google Takeout Gemini chat export: *Access ➔ Read ➔ Strip"
-    " Fluff ➔ Taxonomical Routing (Route to Existing Notebook or Create New)"
-    " ➔ Package for Purge*."
+    "Upload your raw Google Takeout `.zip` export directly. The pipeline"
+    " unpacks your chat history, strips fluff, routes taxonomically, and"
+    " prepares your Markdown digests[cite: 1]."
 )
 
-# Handle GCP / Vertex AI Credentials from Streamlit Secrets (Deducts from your $300 GCP Credits)
+# Handle GCP / Vertex AI Credentials from Streamlit Secrets
 if "GOOGLE_CLOUD_PROJECT" in st.secrets:
   os.environ["GOOGLE_GENAI_USE_VERTEXAI"] = "true"
   os.environ["GOOGLE_CLOUD_PROJECT"] = st.secrets["GOOGLE_CLOUD_PROJECT"]
@@ -31,7 +32,7 @@ if "GOOGLE_CLOUD_PROJECT" in st.secrets:
       f.write(st.secrets["GCP_SERVICE_ACCOUNT_JSON"])
     os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = cred_path
 
-# Existing Ecosystem Notebook Taxonomy from Control Center
+# Existing Ecosystem Notebook Taxonomy
 EXISTING_NOTEBOOKS = {
     "C-SPACE Knowledge Base": (
         "Master aggregation hub containing system inventories, architectural"
@@ -62,48 +63,80 @@ EXISTING_NOTEBOOKS = {
     "Control Center": "Active command interface.",
 }
 
-# File Uploader for Google Takeout JSON export
+# Direct ZIP File Uploader
 uploaded_file = st.file_uploader(
-    "Upload Google Takeout Gemini Export (JSON)", type=["json"]
+    "Upload Google Takeout ZIP Archive", type=["zip"]
 )
 
 if uploaded_file and "GOOGLE_CLOUD_PROJECT" in os.environ:
-  if st.button("🚀 Execute Taxonomic C-SPACE Protocol"):
+  if st.button("🚀 Execute Direct ZIP C-SPACE Protocol"):
     with st.status(
-        "Executing Taxonomic Lifecycle Routing via Vertex AI...", expanded=True
+        "Unpacking ZIP and processing chat transcripts via Vertex AI...",
+        expanded=True,
     ) as status:
-      # Step 1 & 2: Access & Read Chat
-      st.write("📂 Step 1 & 2: Accessing and reading chat transcripts...")
+      st.write("📂 Unpacking Google Takeout ZIP archive in memory...")
+      chat_transcripts = []
+
       try:
-        raw_data = json.load(uploaded_file)
-        chats = raw_data if isinstance(raw_data, list) else [raw_data]
+        with zipfile.ZipFile(io.BytesIO(uploaded_file.read())) as z:
+          for filename in z.namelist():
+            # Process HTML chat exports
+            if filename.endswith(".html") and (
+                "Gemini" in filename or "chats" in filename.lower()
+            ):
+              with z.open(filename) as f:
+                soup = BeautifulSoup(f.read(), "html.parser")
+                text_content = soup.get_text(separator="\n", strip=True)
+                if len(text_content) > 50:
+                  chat_transcripts.append(
+                      {"source": filename, "content": text_content}
+                  )
+            # Process JSON chat exports (if present in archive)
+            elif filename.endswith(".json") and (
+                "Gemini" in filename or "chats" in filename.lower()
+            ):
+              with z.open(filename) as f:
+                try:
+                  data = json.load(f)
+                  chat_str = json.dumps(data, ensure_ascii=False)
+                  if len(chat_str) > 50:
+                    chat_transcripts.append(
+                        {"source": filename, "content": chat_str}
+                    )
+                except Exception:
+                  pass
       except Exception as e:
-        st.error(f"Failed to parse JSON export: {e}")
+        st.error(f"Failed to unpack or read ZIP archive: {e}")
+        st.stop()
+
+      if not chat_transcripts:
+        st.warning(
+            "⚠️ No valid Gemini chat files (.html or .json) were found inside"
+            " this ZIP archive. Please verify it's the correct Takeout export."
+        )
         st.stop()
 
       st.write(
-          f"Found {len(chats)} chat threads. Initializing Vertex AI model"
-          " client..."
+          f"Found {len(chat_transcripts)} valid chat transcripts. Initializing"
+          " Vertex AI model client..."
       )
       client = genai.Client()
 
       processed_artifacts = []
 
       # Process a controlled batch for stability
-      for idx, chat in enumerate(chats[:15]):
-        chat_transcript = json.dumps(chat, ensure_ascii=False)
-
-        # Step 3 & 4: Delete unuseful material & Organize remaining info logically
+      for idx, chat_obj in enumerate(chat_transcripts[:15]):
         st.write(
-            f"✂️ Processing Thread #{idx + 1}: Stripping fluff and organizing..."
+            f"✂️ Processing Chat #{idx + 1} ({chat_obj['source']}): Stripping"
+            " fluff and organizing..."
         )
         distillation_prompt = (
             "You are the C-SPACE Lifecycle Engine. Read the following raw chat"
-            " transcript, delete and strip all transient debugging, repetition,"
-            " pleasantries, and unuseful material. Organize the remaining"
-            " high-value information logically into a clean, version-controlled"
-            " Markdown architecture digest (e.g., [Topic]_Digest_v1.0.md)."
-            f"\n\nRaw Transcript:\n{chat_transcript}"
+            " transcript text, delete and strip all transient debugging,"
+            " repetition, pleasantries, and unuseful material. Organize the"
+            " remaining high-value information logically into a clean,"
+            " version-controlled Markdown architecture digest (e.g.,"
+            f" [Topic]_Digest_v1.0.md).\n\nRaw Transcript Text:\n{chat_obj['content']}"
         )
 
         response = client.models.generate_content(
@@ -111,14 +144,13 @@ if uploaded_file and "GOOGLE_CLOUD_PROJECT" in os.environ:
         )
         distilled_content = response.text
 
-        # Step 5: Taxonomical Routing or New Notebook Creation
         st.write(
-            f"🗂️ Step 5: Performing taxonomic routing for Thread #{idx + 1}..."
+            f"🗂️ Step 5: Performing taxonomic routing for Chat #{idx + 1}..."
         )
         routing_prompt = f"""
                 You are the C-SPACE Taxonomic Routing Engine. 
                 Evaluate the following distilled Markdown digest and determine its proper home based on these existing ecosystem notebooks and their descriptions:
-                {json.dumps(EXISTING_NOTEBOOKS, indent=2)}
+                {str(EXISTING_NOTEBOOKS)}
                 
                 Rules:
                 1. If the content clearly belongs in one of the existing notebooks above, output EXACTLY the notebook name.
@@ -134,29 +166,24 @@ if uploaded_file and "GOOGLE_CLOUD_PROJECT" in os.environ:
 
         processed_artifacts.append({
             "thread_id": idx + 1,
+            "source_file": chat_obj["source"],
             "destination": destination,
             "content": distilled_content,
         })
 
-      # Step 6: Final Packaging Notice for Purge
-      st.write(
-          "🔥 Step 6: Taxonomic mapping complete. Ready for ingestion and raw"
-          " chat purge."
-      )
       status.update(
-          label="[TAXONOMIC C-SPACE ROUTING COMPLETE]",
+          label="[ZIP C-SPACE ROUTING COMPLETE]",
           state="complete",
           expanded=False,
       )
 
     st.success(
-        "✨ Taxonomic C-SPACE pipeline successfully completed using your GCP"
+        "✨ ZIP C-SPACE pipeline successfully completed using your GCP"
         " credits! Review the routing destinations below, ingest the digests"
         " into their respective notebooks, and purge the raw standalone chats"
         " from your history[cite: 1]."
     )
 
-    # Display results and downloadable markdown artifacts with routing indicators
     st.subheader("📦 Taxonomically Sorted C-SPACE Artifacts")
     for art in processed_artifacts:
       is_new = art["destination"].startswith("CREATE_NEW:")
@@ -167,14 +194,15 @@ if uploaded_file and "GOOGLE_CLOUD_PROJECT" in os.environ:
       )
 
       with st.expander(
-          f"Thread #{art['thread_id']} ➔ Destination: {art['destination']}"
+          f"Chat #{art['thread_id']} ({art['source_file']}) ➔ Destination:"
+          f" {art['destination']}"
       ):
         st.markdown(badge)
         st.markdown(art["content"])
         st.download_button(
             label="Download Markdown Digest",
             data=art["content"],
-            file_name=f"C-SPACE_Thread_{art['thread_id']}_Digest.md",
+            file_name=f"C-SPACE_Chat_{art['thread_id']}_Digest.md",
             mime="text/markdown",
             key=f"download_{art['thread_id']}",
         )
