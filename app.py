@@ -105,57 +105,100 @@ if uploaded_file and is_configured:
         "Unpacking ZIP and processing chat transcripts via Vertex AI...",
         expanded=True,
     ) as status:
-      st.write("📂 Unpacking Google Takeout ZIP archive in memory...")
+      st.write(
+          "📂 Unpacking Google Takeout ZIP archive and parsing activity logs..."
+      )
       chat_transcripts = []
 
       try:
         with zipfile.ZipFile(io.BytesIO(uploaded_file.read())) as z:
           for filename in z.namelist():
-            if (
-                "Gemini" in filename or "chats" in filename.lower()
-            ) and filename.endswith((".html", ".json")):
+            # Target Google Takeout's MyActivity JSON export for Gemini Apps
+            if "MyActivity.json" in filename or (
+                "Gemini Apps" in filename and filename.endswith(".json")
+            ):
               with z.open(filename) as f:
-                if filename.endswith(".html"):
-                  soup = BeautifulSoup(f.read(), "html.parser")
+                try:
+                  data = json.load(f)
+                  if isinstance(data, list):
+                    conversations = {}
+                    for item in data:
+                      title_url = item.get("titleUrl", "")
+                      group_key = (
+                          title_url
+                          if title_url
+                          else item.get("header", "General Chat")
+                      )
+                      if group_key not in conversations:
+                        conversations[group_key] = []
+
+                      title = item.get("title", "")
+                      details = item.get("details", [])
+                      detail_texts = [
+                          d.get("text", "")
+                          for d in details
+                          if isinstance(d, dict)
+                      ]
+                      entry_text = f"Action: {title}\n" + "\n".join(
+                          detail_texts
+                      )
+                      conversations[group_key].append(entry_text)
+
+                    for conv_id, entries in conversations.items():
+                      full_chat_text = "\n---\n".join(entries)
+                      if len(full_chat_text) > 50:
+                        chat_transcripts.append({
+                            "source": f"{filename} ({conv_id[-20:]})",
+                            "content": full_chat_text,
+                        })
+                except Exception:
+                  pass
+
+            # Fallback for HTML Takeout activity files
+            elif "MyActivity.html" in filename or (
+                "Gemini Apps" in filename and filename.endswith(".html")
+            ):
+              with z.open(filename) as f:
+                soup = BeautifulSoup(f.read(), "html.parser")
+                cells = soup.find_all("div", class_="outer-cell")
+                if cells:
+                  for idx_cell, cell in enumerate(cells):
+                    cell_text = cell.get_text(separator="\n", strip=True)
+                    if len(cell_text) > 50:
+                      chat_transcripts.append({
+                          "source": f"{filename} (Activity #{idx_cell + 1})",
+                          "content": cell_text,
+                      })
+                else:
                   text_content = soup.get_text(separator="\n", strip=True)
                   if len(text_content) > 50:
                     chat_transcripts.append(
                         {"source": filename, "content": text_content}
                     )
-                elif filename.endswith(".json"):
-                  try:
-                    data = json.load(f)
-                    chat_str = json.dumps(data, ensure_ascii=False)
-                    if len(chat_str) > 50:
-                      chat_transcripts.append(
-                          {"source": filename, "content": chat_str}
-                      )
-                  except Exception:
-                    pass
       except Exception as e:
         st.error(f"Failed to unpack or read ZIP archive: {e}")
         st.stop()
 
       if not chat_transcripts:
         st.warning(
-            "⚠️ No valid Gemini chat files (.html or .json) were found inside"
-            " this ZIP archive. Please verify it's the correct Takeout export."
+            "⚠️ No valid `MyActivity.json` or Gemini chat history files were"
+            " found inside this ZIP archive. Make sure you selected 'My"
+            " Activity ➔ Gemini Apps' in Google Takeout."
         )
         st.stop()
 
       st.write(
-          f"Found {len(chat_transcripts)} valid chat transcripts. Initializing"
-          " Vertex AI model client..."
+          f"Found {len(chat_transcripts)} parsed chat conversation threads."
+          " Initializing Vertex AI model client..."
       )
       client = genai.Client()
 
       processed_artifacts = []
 
-      # Processes all transcripts without arbitrary limits
       for idx, chat_obj in enumerate(chat_transcripts):
         st.write(
-            f"✂️ Processing Chat #{idx + 1} of {len(chat_transcripts)}"
-            f" ({chat_obj['source']}): Stripping fluff and organizing..."
+            f"✂️ Processing Thread #{idx + 1} of {len(chat_transcripts)}"
+            f" ({chat_obj['source']}): Distilling and organizing..."
         )
         distillation_prompt = (
             "You are the C-SPACE Lifecycle Engine. Read the following raw chat"
