@@ -19,6 +19,8 @@ st.markdown(
     " credits."
 )
 
+CHECKPOINT_FILE = "cspace_checkpoint.json"
+
 # Sidebar Configuration for GCP Credentials (Bypasses TOML Secrets bugs)
 st.sidebar.header("🔑 GCP & Vertex AI Configuration")
 project_id_input = st.sidebar.text_input(
@@ -91,19 +93,31 @@ EXISTING_NOTEBOOKS = {
     "Control Center": "Active command interface.",
 }
 
-# Initialize Session State for persistence across interactions
+# 💾 Load Checkpoint Progress from Disk on Startup
 if "processed_artifacts" not in st.session_state:
-  st.session_state["processed_artifacts"] = []
+  if os.path.exists(CHECKPOINT_FILE):
+    try:
+      with open(CHECKPOINT_FILE, "r", encoding="utf-8") as f:
+        st.session_state["processed_artifacts"] = json.load(f)
+      st.sidebar.info(
+          "📂 Restored previous progress from disk checkpoint!"
+          f" ({len(st.session_state['processed_artifacts'])} records loaded)"
+      )
+    except Exception:
+      st.session_state["processed_artifacts"] = []
+  else:
+    st.session_state["processed_artifacts"] = []
 
-# Render cached results if available
-if st.session_state["processed_artifacts"]:
+processed_artifacts = st.session_state["processed_artifacts"]
+
+# Show cached results & outputs if available
+if processed_artifacts:
   st.success(
-      "✨ Loaded cached C-SPACE artifacts from session state. No API re-run"
-      " required!"
+      f"✨ Active progress saved: {len(processed_artifacts)} chat digests"
+      " processed and secured to disk checkpoint."
   )
-  processed_artifacts = st.session_state["processed_artifacts"]
 
-  # Automatically group artifacts by destination container
+  # Group artifacts by destination container
   containers = collections.defaultdict(list)
   for art in processed_artifacts:
     containers[art["destination"]].append(art)
@@ -117,7 +131,7 @@ if st.session_state["processed_artifacts"]:
       " categories."
   )
 
-  # Generate Master Containerized Text Payload for Gemini Ingestion
+  # Generate Master Containerized Text Payload for Gemini
   master_payload_lines = [
       "You are the C-SPACE Master Ecosystem Ingestion Engine.",
       (
@@ -143,7 +157,7 @@ if st.session_state["processed_artifacts"]:
       "📋 Master Containerized Prompt Output (Copy and feed directly into"
       " Gemini):",
       value=full_master_text,
-      height=300,
+      height=250,
   )
 
   # Build Master Containerized ZIP in memory
@@ -182,131 +196,131 @@ if st.session_state["processed_artifacts"]:
         mime="text/plain",
     )
 
-  if st.button("🔄 Clear Cache & Reset Pipeline"):
+  if st.button("🗑️ Reset Pipeline & Delete Checkpoint File"):
+    if os.path.exists(CHECKPOINT_FILE):
+      os.remove(CHECKPOINT_FILE)
     st.session_state["processed_artifacts"] = []
     st.rerun()
 
   st.markdown("---")
-  st.subheader("🗂️ Inspect Individual Container Allocations")
-  for dest_name, arts in containers.items():
-    is_new = dest_name.startswith("CREATE_NEW:")
-    badge = (
-        "🆕 **New Container Required**"
-        if is_new
-        else "📂 **Existing Ecosystem Notebook**"
-    )
 
-    with st.expander(
-        f"Container: {dest_name} ({len(arts)} chat digests assigned)"
-    ):
-      st.markdown(badge)
-      for art in arts:
-        st.markdown(f"**Source:** {art['source_file']}")
-        st.markdown(art["content"])
-        st.markdown("---")
+# Uploader Section
+uploaded_file = st.file_uploader(
+    "Upload Google Takeout ZIP Archive (.zip)", type=["zip"]
+)
+is_configured = "GOOGLE_CLOUD_PROJECT" in os.environ and os.path.exists(
+    os.environ.get("GOOGLE_APPLICATION_CREDENTIALS", "")
+)
 
-else:
-  uploaded_file = st.file_uploader(
-      "Upload Google Takeout ZIP Archive (.zip)", type=["zip"]
-  )
-  is_configured = "GOOGLE_CLOUD_PROJECT" in os.environ and os.path.exists(
-      os.environ.get("GOOGLE_APPLICATION_CREDENTIALS", "")
+if uploaded_file and is_configured:
+  button_label = (
+      "▶️ Resume C-SPACE ZIP Processing"
+      if processed_artifacts
+      else "🚀 Start Direct ZIP C-SPACE Protocol"
   )
 
-  if uploaded_file and is_configured:
-    if st.button("🚀 Execute Direct ZIP C-SPACE Protocol"):
-      with st.status(
-          "Unpacking ZIP and processing chat transcripts via Vertex AI...",
-          expanded=True,
-      ) as status:
-        st.write(
-            "📂 Unpacking Google Takeout ZIP archive and scanning all files..."
+  if st.button(button_label):
+    with st.status(
+        "Unpacking ZIP and processing chat transcripts via Vertex AI...",
+        expanded=True,
+    ) as status:
+      st.write(
+          "📂 Unpacking Google Takeout ZIP archive and scanning all files..."
+      )
+      chat_transcripts = []
+
+      try:
+        with zipfile.ZipFile(io.BytesIO(uploaded_file.read())) as z:
+          for filename in z.namelist():
+            if filename.endswith(
+                (".json", ".html")
+            ) and not filename.startswith("__MACOSX"):
+              with z.open(filename) as f:
+                content_bytes = f.read()
+                if filename.endswith(".json"):
+                  try:
+                    data = json.loads(
+                        content_bytes.decode("utf-8", errors="ignore")
+                    )
+                    if isinstance(data, list):
+                      for idx_item, item in enumerate(data):
+                        text_parts = []
+                        if isinstance(item, dict):
+                          for k, v in item.items():
+                            if isinstance(v, str) and len(v) > 10:
+                              text_parts.append(v)
+                            elif isinstance(v, list):
+                              for sub in v:
+                                if isinstance(sub, dict):
+                                  for sk, sv in sub.items():
+                                    if isinstance(sv, str) and len(sv) > 10:
+                                      text_parts.append(sv)
+                        if text_parts:
+                          combined = "\n".join(text_parts)
+                          if len(combined) > 50:
+                            chat_transcripts.append({
+                                "source": f"{filename} (#{idx_item + 1})",
+                                "content": combined,
+                            })
+                    elif isinstance(data, dict):
+                      chat_str = json.dumps(data, ensure_ascii=False)
+                      if len(chat_str) > 50:
+                        chat_transcripts.append(
+                            {"source": filename, "content": chat_str}
+                        )
+                  except Exception:
+                    pass
+                elif filename.endswith(".html"):
+                  try:
+                    soup = BeautifulSoup(content_bytes, "html.parser")
+                    text_content = soup.get_text(separator="\n", strip=True)
+                    if len(text_content) > 50:
+                      chat_transcripts.append(
+                          {"source": filename, "content": text_content}
+                      )
+                  except Exception:
+                    pass
+      except Exception as e:
+        st.error(f"Failed to unpack or read ZIP archive: {e}")
+        st.stop()
+
+      if not chat_transcripts:
+        st.warning(
+            "⚠️ No valid chat records were found inside this ZIP archive."
         )
-        chat_transcripts = []
+        st.stop()
+
+      # Set of already completed sources from disk checkpoint
+      already_processed_sources = {
+          art["source_file"] for art in processed_artifacts
+      }
+      st.write(
+          f"Found {len(chat_transcripts)} total records."
+          f" ({len(already_processed_sources)} already completed in checkpoint)"
+      )
+
+      client = genai.Client()
+
+      for idx, chat_obj in enumerate(chat_transcripts):
+        # SKIP ALREADY PROCESSED FILES (RESUME CAPABILITY)
+        if chat_obj["source"] in already_processed_sources:
+          continue
+
+        st.write(
+            f"✂️ Processing Record #{idx + 1} of {len(chat_transcripts)}"
+            f" ({chat_obj['source']}): Distilling and organizing..."
+        )
+
+        distillation_prompt = (
+            "You are the C-SPACE Lifecycle Engine. Read the following raw chat"
+            " transcript text, delete and strip all transient debugging,"
+            " repetition, pleasantries, and unuseful material. Organize the"
+            " remaining high-value information logically into a clean,"
+            " version-controlled Markdown architecture digest (e.g.,"
+            f" [Topic]_Digest_v1.0.md).\n\nRaw Transcript Text:\n{chat_obj['content']}"
+        )
 
         try:
-          with zipfile.ZipFile(io.BytesIO(uploaded_file.read())) as z:
-            for filename in z.namelist():
-              if filename.endswith(
-                  (".json", ".html")
-              ) and not filename.startswith("__MACOSX"):
-                with z.open(filename) as f:
-                  content_bytes = f.read()
-                  if filename.endswith(".json"):
-                    try:
-                      data = json.loads(
-                          content_bytes.decode("utf-8", errors="ignore")
-                      )
-                      if isinstance(data, list):
-                        for idx_item, item in enumerate(data):
-                          text_parts = []
-                          if isinstance(item, dict):
-                            for k, v in item.items():
-                              if isinstance(v, str) and len(v) > 10:
-                                text_parts.append(v)
-                              elif isinstance(v, list):
-                                for sub in v:
-                                  if isinstance(sub, dict):
-                                    for sk, sv in sub.items():
-                                      if isinstance(sv, str) and len(sv) > 10:
-                                        text_parts.append(sv)
-                          if text_parts:
-                            combined = "\n".join(text_parts)
-                            if len(combined) > 50:
-                              chat_transcripts.append({
-                                  "source": f"{filename} (#{idx_item + 1})",
-                                  "content": combined,
-                              })
-                      elif isinstance(data, dict):
-                        chat_str = json.dumps(data, ensure_ascii=False)
-                        if len(chat_str) > 50:
-                          chat_transcripts.append(
-                              {"source": filename, "content": chat_str}
-                          )
-                    except Exception:
-                      pass
-                  elif filename.endswith(".html"):
-                    try:
-                      soup = BeautifulSoup(content_bytes, "html.parser")
-                      text_content = soup.get_text(separator="\n", strip=True)
-                      if len(text_content) > 50:
-                        chat_transcripts.append(
-                            {"source": filename, "content": text_content}
-                        )
-                    except Exception:
-                      pass
-        except Exception as e:
-          st.error(f"Failed to unpack or read ZIP archive: {e}")
-          st.stop()
-
-        if not chat_transcripts:
-          st.warning(
-              "⚠️ No valid chat records were found inside this ZIP archive."
-          )
-          st.stop()
-
-        st.write(
-            f"Found {len(chat_transcripts)} valid chat records. Initializing"
-            " Vertex AI model client..."
-        )
-        client = genai.Client()
-
-        processed_artifacts = []
-
-        for idx, chat_obj in enumerate(chat_transcripts):
-          st.write(
-              f"✂️ Processing Record #{idx + 1} of {len(chat_transcripts)}"
-              f" ({chat_obj['source']}): Distilling and organizing..."
-          )
-          distillation_prompt = (
-              "You are the C-SPACE Lifecycle Engine. Read the following raw"
-              " chat transcript text, delete and strip all transient"
-              " debugging, repetition, pleasantries, and unuseful material."
-              " Organize the remaining high-value information logically into a"
-              " clean, version-controlled Markdown architecture digest (e.g.,"
-              f" [Topic]_Digest_v1.0.md).\n\nRaw Transcript Text:\n{chat_obj['content']}"
-          )
-
           response = client.models.generate_content(
               model="gemini-2.5-flash", contents=distillation_prompt
           )
@@ -329,26 +343,32 @@ else:
           )
           destination = route_response.text.strip()
 
-          processed_artifacts.append({
-              "thread_id": idx + 1,
+          new_artifact = {
+              "thread_id": len(processed_artifacts) + 1,
               "source_file": chat_obj["source"],
               "destination": destination,
               "content": distilled_content,
-          })
+          }
 
-        # Save to session state
-        st.session_state["processed_artifacts"] = processed_artifacts
+          # Update memory and IMMEDIATELY write to disk checkpoint
+          processed_artifacts.append(new_artifact)
+          st.session_state["processed_artifacts"] = processed_artifacts
 
-        status.update(
-            label="[ZIP C-SPACE ROUTING COMPLETE]",
-            state="complete",
-            expanded=False,
-        )
-      st.rerun()
+          with open(CHECKPOINT_FILE, "w", encoding="utf-8") as f:
+            json.dump(processed_artifacts, f, indent=2, ensure_ascii=False)
 
-  elif uploaded_file and not is_configured:
-    st.warning(
-        "⚠️ Please enter your **GCP Project ID** and upload your **Service"
-        " Account JSON Key** in the sidebar to run the pipeline using your $300"
-        " GCP credits."
-    )
+        except Exception as err:
+          st.error(f"Error processing {chat_obj['source']}: {err}")
+          # Saved progress is retained on disk up to this record
+
+      status.update(
+          label="[ZIP C-SPACE ROUTING COMPLETE]", state="complete", expanded=False
+      )
+    st.rerun()
+
+elif uploaded_file and not is_configured:
+  st.warning(
+      "⚠️ Please enter your **GCP Project ID** and upload your **Service"
+      " Account JSON Key** in the sidebar to run the pipeline using your $300"
+      " GCP credits."
+  )
