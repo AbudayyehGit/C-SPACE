@@ -13,59 +13,51 @@ st.set_page_config(
 
 st.title("🧹 C-SPACE Direct ZIP Takeout Lifecycle & Routing Pipeline")
 st.markdown(
-    "Upload your raw Google Takeout `.zip` export directly. The pipeline"
-    " unpacks your chat history, strips fluff, routes taxonomically, and"
-    " prepares your Markdown digests."
+    "Upload your raw Google Takeout `.zip` export and your GCP Service Account"
+    " JSON key to process your chat history using your $300 GCP credits."
 )
 
-# Ultimate Bulletproof GCP / Vertex AI Credential & PEM Reconstructor
-if "GOOGLE_CLOUD_PROJECT" in st.secrets:
+# Sidebar Configuration for GCP Credentials (Bypasses TOML Secrets bugs)
+st.sidebar.header("🔑 GCP & Vertex AI Configuration")
+project_id_input = st.sidebar.text_input(
+    "GCP Project ID",
+    value=(
+        st.secrets["GOOGLE_CLOUD_PROJECT"]
+        if "GOOGLE_CLOUD_PROJECT" in st.secrets
+        else ""
+    ),
+    placeholder="e.g. my-cspace-project",
+)
+location_input = st.sidebar.text_input(
+    "GCP Region / Location", value="us-central1"
+)
+
+sa_file = st.sidebar.file_uploader(
+    "Upload Service Account JSON Key",
+    type=["json"],
+    help="Upload your downloaded Google Cloud Service Account JSON file here.",
+)
+
+# Configure Environment Variables
+if project_id_input:
   os.environ["GOOGLE_GENAI_USE_VERTEXAI"] = "true"
-  os.environ["GOOGLE_CLOUD_PROJECT"] = st.secrets["GOOGLE_CLOUD_PROJECT"]
-  os.environ["GOOGLE_CLOUD_LOCATION"] = st.secrets.get(
-      "GOOGLE_CLOUD_LOCATION", "us-central1"
-  )
+  os.environ["GOOGLE_CLOUD_PROJECT"] = project_id_input
+  os.environ["GOOGLE_CLOUD_LOCATION"] = location_input
 
-  try:
-    if "gcp_service_account" in st.secrets:
-      sa_info = dict(st.secrets["gcp_service_account"])
-    elif "GCP_SERVICE_ACCOUNT_JSON" in st.secrets:
-      raw_secret = st.secrets["GCP_SERVICE_ACCOUNT_JSON"]
-      sa_info = (
-          raw_secret if isinstance(raw_secret, dict) else json.loads(raw_secret)
-      )
-    else:
-      sa_info = None
-
-    if sa_info and "private_key" in sa_info:
-      pk = sa_info["private_key"]
-      # Clean up escaped or literal newlines
-      pk = pk.replace("\\\\n", "\n").replace("\\n", "\n")
-      
-      # If newlines were stripped into spaces by TOML parsing, rebuild the PEM block
-      if "-----BEGIN PRIVATE KEY-----" in pk and "-----END PRIVATE KEY-----" in pk:
-        body = (
-            pk.replace("-----BEGIN PRIVATE KEY-----", "")
-            .replace("-----END PRIVATE KEY-----", "")
-            .strip()
-        )
-        # Remove all whitespace/spaces and re-break into standard 64-character PEM lines
-        clean_body = "".join(body.split())
-        formatted_body = "\n".join(
-            clean_body[i : i + 64] for i in range(0, len(clean_body), 64)
-        )
-        sa_info["private_key"] = (
-            "-----BEGIN PRIVATE KEY-----\n"
-            + formatted_body
-            + "\n-----END PRIVATE KEY-----\n"
-        )
-
+  if sa_file is not None:
+    try:
       cred_path = "/tmp/service_account.json"
-      with open(cred_path, "w") as f:
-        json.dump(sa_info, f)
+      file_bytes = sa_file.read()
+      # Validate that it's valid JSON before saving
+      sa_info = json.loads(file_bytes.decode("utf-8"))
+      with open(cred_path, "wb") as f:
+        f.write(file_bytes)
       os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = cred_path
-  except Exception as e:
-    st.error(f"Credential configuration error: {e}")
+      st.sidebar.success(
+          "✅ Service Account loaded successfully from uploaded file!"
+      )
+    except Exception as e:
+      st.sidebar.error(f"Invalid JSON file: {e}")
 
 # Existing Ecosystem Notebook Taxonomy
 EXISTING_NOTEBOOKS = {
@@ -100,10 +92,14 @@ EXISTING_NOTEBOOKS = {
 
 # Direct ZIP File Uploader
 uploaded_file = st.file_uploader(
-    "Upload Google Takeout ZIP Archive", type=["zip"]
+    "Upload Google Takeout ZIP Archive (.zip)", type=["zip"]
 )
 
-if uploaded_file and "GOOGLE_CLOUD_PROJECT" in os.environ:
+is_configured = "GOOGLE_CLOUD_PROJECT" in os.environ and os.path.exists(
+    os.environ.get("GOOGLE_APPLICATION_CREDENTIALS", "")
+)
+
+if uploaded_file and is_configured:
   if st.button("🚀 Execute Direct ZIP C-SPACE Protocol"):
     with st.status(
         "Unpacking ZIP and processing chat transcripts via Vertex AI...",
@@ -238,8 +234,9 @@ if uploaded_file and "GOOGLE_CLOUD_PROJECT" in os.environ:
             mime="text/markdown",
             key=f"download_{art['thread_id']}",
         )
-elif not "GOOGLE_CLOUD_PROJECT" in os.environ and uploaded_file:
+elif uploaded_file and not is_configured:
   st.warning(
-      "⚠️ Please configure your Google Cloud project secrets in Streamlit Cloud"
-      " to draw from your $300 GCP credits."
+      "⚠️ Please enter your **GCP Project ID** and upload your **Service"
+      " Account JSON Key** in the sidebar to run the pipeline using your $300"
+      " GCP credits."
   )
