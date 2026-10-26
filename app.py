@@ -14,7 +14,8 @@ st.set_page_config(
 st.title("🧹 C-SPACE Direct ZIP Takeout Lifecycle & Routing Pipeline")
 st.markdown(
     "Upload your raw Google Takeout `.zip` export and your GCP Service Account"
-    " JSON key to process your chat history using your $300 GCP credits."
+    " JSON key to process your entire chat archive using your $300 GCP"
+    " credits."
 )
 
 # Sidebar Configuration for GCP Credentials (Bypasses TOML Secrets bugs)
@@ -48,7 +49,6 @@ if project_id_input:
     try:
       cred_path = "/tmp/service_account.json"
       file_bytes = sa_file.read()
-      # Validate that it's valid JSON before saving
       sa_info = json.loads(file_bytes.decode("utf-8"))
       with open(cred_path, "wb") as f:
         f.write(file_bytes)
@@ -111,29 +111,27 @@ if uploaded_file and is_configured:
       try:
         with zipfile.ZipFile(io.BytesIO(uploaded_file.read())) as z:
           for filename in z.namelist():
-            if filename.endswith(".html") and (
+            if (
                 "Gemini" in filename or "chats" in filename.lower()
-            ):
+            ) and filename.endswith((".html", ".json")):
               with z.open(filename) as f:
-                soup = BeautifulSoup(f.read(), "html.parser")
-                text_content = soup.get_text(separator="\n", strip=True)
-                if len(text_content) > 50:
-                  chat_transcripts.append(
-                      {"source": filename, "content": text_content}
-                  )
-            elif filename.endswith(".json") and (
-                "Gemini" in filename or "chats" in filename.lower()
-            ):
-              with z.open(filename) as f:
-                try:
-                  data = json.load(f)
-                  chat_str = json.dumps(data, ensure_ascii=False)
-                  if len(chat_str) > 50:
+                if filename.endswith(".html"):
+                  soup = BeautifulSoup(f.read(), "html.parser")
+                  text_content = soup.get_text(separator="\n", strip=True)
+                  if len(text_content) > 50:
                     chat_transcripts.append(
-                        {"source": filename, "content": chat_str}
+                        {"source": filename, "content": text_content}
                     )
-                except Exception:
-                  pass
+                elif filename.endswith(".json"):
+                  try:
+                    data = json.load(f)
+                    chat_str = json.dumps(data, ensure_ascii=False)
+                    if len(chat_str) > 50:
+                      chat_transcripts.append(
+                          {"source": filename, "content": chat_str}
+                      )
+                  except Exception:
+                    pass
       except Exception as e:
         st.error(f"Failed to unpack or read ZIP archive: {e}")
         st.stop()
@@ -153,10 +151,11 @@ if uploaded_file and is_configured:
 
       processed_artifacts = []
 
-      for idx, chat_obj in enumerate(chat_transcripts[:15]):
+      # Processes all transcripts without arbitrary limits
+      for idx, chat_obj in enumerate(chat_transcripts):
         st.write(
-            f"✂️ Processing Chat #{idx + 1} ({chat_obj['source']}): Stripping"
-            " fluff and organizing..."
+            f"✂️ Processing Chat #{idx + 1} of {len(chat_transcripts)}"
+            f" ({chat_obj['source']}): Stripping fluff and organizing..."
         )
         distillation_prompt = (
             "You are the C-SPACE Lifecycle Engine. Read the following raw chat"
@@ -172,9 +171,6 @@ if uploaded_file and is_configured:
         )
         distilled_content = response.text
 
-        st.write(
-            f"🗂️ Step 5: Performing taxonomic routing for Chat #{idx + 1}..."
-        )
         routing_prompt = f"""
                 You are the C-SPACE Taxonomic Routing Engine. 
                 Evaluate the following distilled Markdown digest and determine its proper home based on these existing ecosystem notebooks and their descriptions:
@@ -206,10 +202,9 @@ if uploaded_file and is_configured:
       )
 
     st.success(
-        "✨ ZIP C-SPACE pipeline successfully completed using your GCP"
-        " credits! Review the routing destinations below, ingest the digests"
-        " into their respective notebooks, and purge the raw standalone chats"
-        " from your history."
+        f"✨ ZIP C-SPACE pipeline successfully processed all"
+        f" {len(processed_artifacts)} chat threads using your GCP credits!"
+        " Review the routing destinations below."
     )
 
     st.subheader("📦 Taxonomically Sorted C-SPACE Artifacts")
