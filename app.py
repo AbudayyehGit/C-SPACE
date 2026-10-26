@@ -18,7 +18,7 @@ st.markdown(
     " prepares your Markdown digests."
 )
 
-# Bulletproof GCP / Vertex AI Credential & Private Key Sanitization
+# Ultimate Bulletproof GCP / Vertex AI Credential & PEM Reconstructor
 if "GOOGLE_CLOUD_PROJECT" in st.secrets:
   os.environ["GOOGLE_GENAI_USE_VERTEXAI"] = "true"
   os.environ["GOOGLE_CLOUD_PROJECT"] = st.secrets["GOOGLE_CLOUD_PROJECT"]
@@ -37,15 +37,28 @@ if "GOOGLE_CLOUD_PROJECT" in st.secrets:
     else:
       sa_info = None
 
-    if sa_info:
-      if "private_key" in sa_info:
-        pk = sa_info["private_key"]
-        pk = pk.replace("\\\\n", "\n").replace("\\n", "\n")
-        if not pk.startswith("-----BEGIN PRIVATE KEY-----"):
-          pk = "-----BEGIN PRIVATE KEY-----\n" + pk.strip()
-        if not pk.endswith("-----END PRIVATE KEY-----"):
-          pk = pk.strip() + "\n-----END PRIVATE KEY-----\n"
-        sa_info["private_key"] = pk
+    if sa_info and "private_key" in sa_info:
+      pk = sa_info["private_key"]
+      # Clean up escaped or literal newlines
+      pk = pk.replace("\\\\n", "\n").replace("\\n", "\n")
+      
+      # If newlines were stripped into spaces by TOML parsing, rebuild the PEM block
+      if "-----BEGIN PRIVATE KEY-----" in pk and "-----END PRIVATE KEY-----" in pk:
+        body = (
+            pk.replace("-----BEGIN PRIVATE KEY-----", "")
+            .replace("-----END PRIVATE KEY-----", "")
+            .strip()
+        )
+        # Remove all whitespace/spaces and re-break into standard 64-character PEM lines
+        clean_body = "".join(body.split())
+        formatted_body = "\n".join(
+            clean_body[i : i + 64] for i in range(0, len(clean_body), 64)
+        )
+        sa_info["private_key"] = (
+            "-----BEGIN PRIVATE KEY-----\n"
+            + formatted_body
+            + "\n-----END PRIVATE KEY-----\n"
+        )
 
       cred_path = "/tmp/service_account.json"
       with open(cred_path, "w") as f:
