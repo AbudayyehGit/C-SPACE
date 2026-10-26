@@ -11,14 +11,14 @@ st.set_page_config(
     page_title="C-SPACE ZIP Takeout Pipeline", page_icon="🧹", layout="wide"
 )
 
-st.title("🧹 C-SPACE Direct ZIP Takeout Pipeline")
+st.title("🧹 C-SPACE Direct ZIP Takeout Lifecycle & Routing Pipeline")
 st.markdown(
     "Upload your raw Google Takeout `.zip` export directly. The pipeline"
     " unpacks your chat history, strips fluff, routes taxonomically, and"
-    " prepares your Markdown digests[cite: 1]."
+    " prepares your Markdown digests."
 )
 
-# Handle GCP / Vertex AI Credentials from Streamlit Secrets
+# Robust GCP / Vertex AI Credentials & Private Key Sanitization from Streamlit Secrets
 if "GOOGLE_CLOUD_PROJECT" in st.secrets:
   os.environ["GOOGLE_GENAI_USE_VERTEXAI"] = "true"
   os.environ["GOOGLE_CLOUD_PROJECT"] = st.secrets["GOOGLE_CLOUD_PROJECT"]
@@ -28,8 +28,37 @@ if "GOOGLE_CLOUD_PROJECT" in st.secrets:
 
   if "GCP_SERVICE_ACCOUNT_JSON" in st.secrets:
     cred_path = "/tmp/service_account.json"
+    raw_secret = st.secrets["GCP_SERVICE_ACCOUNT_JSON"]
+
+    try:
+      sa_info = (
+          raw_secret if isinstance(raw_secret, dict) else json.loads(raw_secret)
+      )
+    except Exception:
+      cleaned_secret = (
+          raw_secret.strip().replace("\n", "\\n").replace("\\\\n", "\\n")
+      )
+      sa_info = json.loads(cleaned_secret)
+
+    if "private_key" in sa_info:
+      sa_info["private_key"] = (
+          sa_info["private_key"]
+          .replace("\\n", "\n")
+          .replace('"', "")
+          .strip()
+      )
+      if "BEGIN PRIVATE KEY" in sa_info["private_key"] and not sa_info[
+          "private_key"
+      ].startswith("-----BEGIN PRIVATE KEY-----\n"):
+        sa_info["private_key"] = (
+            sa_info["private_key"]
+            .replace("-----BEGIN PRIVATE KEY-----", "-----BEGIN PRIVATE KEY-----\n")
+            .replace("-----END PRIVATE KEY-----", "\n-----END PRIVATE KEY-----")
+        )
+
     with open(cred_path, "w") as f:
-      f.write(st.secrets["GCP_SERVICE_ACCOUNT_JSON"])
+      json.dump(sa_info, f)
+
     os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = cred_path
 
 # Existing Ecosystem Notebook Taxonomy
@@ -80,7 +109,6 @@ if uploaded_file and "GOOGLE_CLOUD_PROJECT" in os.environ:
       try:
         with zipfile.ZipFile(io.BytesIO(uploaded_file.read())) as z:
           for filename in z.namelist():
-            # Process HTML chat exports
             if filename.endswith(".html") and (
                 "Gemini" in filename or "chats" in filename.lower()
             ):
@@ -91,7 +119,6 @@ if uploaded_file and "GOOGLE_CLOUD_PROJECT" in os.environ:
                   chat_transcripts.append(
                       {"source": filename, "content": text_content}
                   )
-            # Process JSON chat exports (if present in archive)
             elif filename.endswith(".json") and (
                 "Gemini" in filename or "chats" in filename.lower()
             ):
@@ -124,7 +151,6 @@ if uploaded_file and "GOOGLE_CLOUD_PROJECT" in os.environ:
 
       processed_artifacts = []
 
-      # Process a controlled batch for stability
       for idx, chat_obj in enumerate(chat_transcripts[:15]):
         st.write(
             f"✂️ Processing Chat #{idx + 1} ({chat_obj['source']}): Stripping"
@@ -181,7 +207,7 @@ if uploaded_file and "GOOGLE_CLOUD_PROJECT" in os.environ:
         "✨ ZIP C-SPACE pipeline successfully completed using your GCP"
         " credits! Review the routing destinations below, ingest the digests"
         " into their respective notebooks, and purge the raw standalone chats"
-        " from your history[cite: 1]."
+        " from your history."
     )
 
     st.subheader("📦 Taxonomically Sorted C-SPACE Artifacts")
